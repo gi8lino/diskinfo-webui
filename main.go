@@ -16,6 +16,7 @@ type DiskInfo struct {
 	Size        uint64
 	Used        uint64
 	Free        uint64
+	Ignore      bool
 	HumanSize   string
 	HumanUsed   string
 	HumanFree   string
@@ -72,9 +73,11 @@ func FetchDiskInfo() {
 			fmt.Println("Error fetching usage for", p.Device, ":", err)
 			continue
 		}
+		ignore := false
 		for _, idisk := range ignoreDisks {
 			if strings.Contains(p.Device, idisk) {
-				fmt.Printf("Ignore disk '%s'", idisk)
+				ignore = true
+				break
 			}
 		}
 		usedPercent := int((float64(usage.Used) / float64(usage.Total)) * 100)
@@ -85,6 +88,7 @@ func FetchDiskInfo() {
 			Size:        usage.Total,
 			Used:        usage.Used,
 			Free:        usage.Free,
+			Ignore:      ignore,
 			HumanSize:   humanReadable(usage.Total),
 			HumanUsed:   humanReadable(usage.Used),
 			HumanFree:   humanReadable(usage.Free),
@@ -111,8 +115,22 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// IgnoreHandler handles the ignore disks configuration
+func IgnoreHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		r.ParseForm()
+		ignoreDisks = r.Form["ignore"]
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
+	tmpl := template.Must(template.ParseFiles("templates/ignore.html"))
+	tmpl.Execute(w, ignoreDisks)
+}
+
 func main() {
 	http.HandleFunc("/", IndexHandler)
+	http.HandleFunc("/ignore", IgnoreHandler)
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 
 	fmt.Println("Starting server at :8080")

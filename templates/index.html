@@ -8,7 +8,7 @@
     <h1>Disk Information</h1>
     <div class="view-switch">
       <a href="/?view=table" class="button">Table View</a>
-      <a href="/?view=round" class="button">Pichart View</a>
+      <a href="/?view=pichart" class="button">Pichart View</a>
       <a href="/?view=columns" class="button">Columns View</a>
     </div>
     {{if eq .View "table"}}
@@ -32,7 +32,7 @@
     </table>
     {{else}}
     <div class="wrapper">
-      {{range .DiskInfos}} {{if eq $.View "round"}}
+      {{range .DiskInfos}} {{if eq $.View "pichart"}}
       <div class="disk {{if .Ignore}}ignore{{end}}">
         <div class="info">
           <div class="name">{{.Device}}</div>
@@ -66,12 +66,16 @@
             class="used tooltip-trigger"
             style="height: {{.UsedPercent}}%;"
             data-tooltip="Used: {{.HumanUsed}} ({{.UsedPercent}}%)"
-          ></div>
+          >
+            {{if gt .UsedPercent 0}} {{.UsedPercent}}% {{end}}
+          </div>
           <div
             class="free tooltip-trigger"
             style="height: {{.FreePercent}}%;"
             data-tooltip="Free: {{.HumanFree}} ({{.FreePercent}}%)"
-          ></div>
+          >
+            {{if gt .FreePercent 0}} {{.FreePercent}}% {{end}}
+          </div>
         </div>
       </div>
       {{end}} {{end}}

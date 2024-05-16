@@ -1,5 +1,5 @@
 ---
-project_name: Heartbeats
+project_name: Diskinfo
 before:
   hooks:
     - go mod tidy

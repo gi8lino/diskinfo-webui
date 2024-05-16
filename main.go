@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -51,17 +52,35 @@ func humanReadableSize(size uint64) string {
 }
 
 // gatherDiskInfo collects disk information, ignoring specified types
-func gatherDiskInfo(ignoreTypes []string) []DiskInfo {
-	partitions, _ := disk.Partitions(true)
+func gatherDiskInfo(ignoreTypes []string, hostProc string) []DiskInfo {
+	partitions, err := disk.PartitionsWithContext(context.Background(), true)
+	if err != nil {
+		log.Printf("Error retrieving partitions: %v", err)
+		return nil
+	}
+
 	var diskInfos []DiskInfo
 
 	for _, p := range partitions {
-		usage, _ := disk.Usage(p.Mountpoint)
+		// Check if the partition has a mount point
+		if p.Mountpoint == "" {
+			log.Printf("Partition %s has no mountpoint, skipping", p.Device)
+			continue
+		}
+
+		usage, err := disk.Usage(filepath.Join(hostProc, p.Mountpoint))
+		if err != nil {
+			log.Printf("Error getting usage for %s: %v", p.Mountpoint, err)
+			continue
+		}
+
 		if usage.Total == 0 {
+			log.Printf("Partition %s has total size 0, skipping", p.Mountpoint)
 			continue
 		}
 
 		if contains(ignoreTypes, p.Fstype) {
+			log.Printf("Partition %s with type %s is in ignore list, skipping", p.Mountpoint, p.Fstype)
 			continue
 		}
 
@@ -111,12 +130,12 @@ func renderTemplate(w http.ResponseWriter, tmpl string, data interface{}) {
 }
 
 // handler returns an http.HandlerFunc that renders the disk information page
-func handler(ignoreTypes []string) http.HandlerFunc {
+func handler(ignoreTypes []string, hostProc string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		data := struct {
 			DiskInfos []DiskInfo
 		}{
-			DiskInfos: gatherDiskInfo(ignoreTypes),
+			DiskInfos: gatherDiskInfo(ignoreTypes, hostProc),
 		}
 		renderTemplate(w, "index.html", data)
 	}
@@ -143,20 +162,28 @@ var staticFs embed.FS
 
 func main() {
 	var ignoreTypes multiStringFlag
-
 	envIgnoreTypes := os.Getenv("DISKINFO_IGNORE_TYPES")
 	if envIgnoreTypes != "" {
 		ignoreTypes = strings.Split(envIgnoreTypes, ",")
 	}
+	pflag.VarP(&ignoreTypes, "ignore-type", "i", "File system types to ignore (can be specified multiple times). You can also use the DISKINFO_IGNORE_TYPES environment variable.")
 
-	pflag.VarP(&ignoreTypes, "ignore-type", "i", "File system types to ignore (can be specified multiple times)")
+	var hostProc string
+	envHostProc := os.Getenv("DISKINFO_HOST_PROC")
+	if envHostProc == "" {
+		hostProc = "/proc"
+	} else {
+		hostProc = envHostProc
+	}
+
+	pflag.StringVarP(&hostProc, "host-proc", "p", hostProc, "Path to the host's /proc directory. You can also use the DISKINFO_HOST_PROC environment variable.")
 	help := pflag.BoolP("help", "h", false, "Show help message")
 
 	// Override the default usage function to include custom environment variable information
 	pflag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
 		pflag.PrintDefaults()
-		fmt.Fprintln(os.Stderr, "\nYou can also use the DISKINFO_IGNORE_TYPES environment variable to specify file system types to ignore, separated by commas (example: DISKINFO_IGNORE_TYPES=nfs,ext4).")
+		fmt.Fprintln(os.Stderr, "\nYou can also use the DISKINFO_IGNORE_TYPES and DISKINFO_HOST_PROC environment variables.")
 	}
 
 	pflag.Parse()
@@ -167,7 +194,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", handler(ignoreTypes))
+	mux.HandleFunc("/", handler(ignoreTypes, hostProc))
 
 	// Only this ugly way worked with the correct mime type
 	fsys := fs.FS(staticFs)
@@ -180,9 +207,11 @@ func main() {
 		Handler: mux,
 	}
 
+	// Channel to listen for signals
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
+	// Goroutine to start the server
 	go func() {
 		log.Println("Starting server on :8080")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

@@ -1,8 +1,11 @@
-module sizer
+module diskinfo
 
 go 1.22.3
 
-require github.com/shirou/gopsutil v3.21.11+incompatible
+require (
+	github.com/shirou/gopsutil v3.21.11+incompatible
+	github.com/spf13/pflag v1.0.5
+)
 
 require (
 	github.com/go-ole/go-ole v1.2.6 // indirect

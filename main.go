@@ -2,102 +2,56 @@ package main
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"log"
-	"math"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/shirou/gopsutil/disk"
+	"github.com/spf13/pflag"
 )
 
+// DiskInfo holds information about a disk partition
 type DiskInfo struct {
-	Device         string
-	Size           uint64
-	Used           uint64
-	Free           uint64
-	Type           string
-	HumanSize      string
-	HumanUsed      string
-	HumanFree      string
-	UsedPercent    float64
-	FreePercent    float64
-	PieChart       string
-	UsedTextX      float64
-	UsedTextY      float64
-	FreeTextX      float64
-	FreeTextY      float64
-	UsedPercentStr string
-	FreePercentStr string
+	Device      string
+	Size        uint64
+	Used        uint64
+	Free        uint64
+	Type        string
+	HumanSize   string
+	HumanUsed   string
+	HumanFree   string
+	UsedPercent float64
+	FreePercent float64
 }
 
-var (
-	templates   *template.Template
-	ignoreTypes = []string{"cdrom"}
-)
-
+// humanReadableSize converts a size in bytes to a human-readable string
 func humanReadableSize(size uint64) string {
 	const unit = 1024
+
 	if size < unit {
 		return fmt.Sprintf("%d B", size)
 	}
+
 	div, exp := int64(unit), 0
+
 	for n := size / unit; n >= unit; n /= unit {
 		div *= unit
 		exp++
 	}
+
 	return fmt.Sprintf("%.1f %cB", float64(size)/float64(div), "KMGTPE"[exp])
 }
 
-func formatPercent(percent float64) string {
-	return fmt.Sprintf("%.0f", percent)
-}
-
-func calculateTextPosition(percent float64, radius float64) (float64, float64) {
-	angle := (percent / 100) * 360.0
-	rad := angle * (math.Pi / 180.0)
-	x := 50 + radius*math.Cos(rad) // assuming the center is at (50, 50)
-	y := 50 - radius*math.Sin(rad) // SVG coordinates are inverted for y
-
-	// Apply a slight offset to the x coordinate to move the text left or right
-	offset := 15.0
-	if percent > 50 {
-		x -= offset
-	} else {
-		x += offset
-	}
-
-	return x, y
-}
-
-func calculatePieChartPath(percent float64) string {
-	if percent == 0 {
-		return ""
-	}
-	r := 50.0
-	x := 50 + r*math.Cos(2*math.Pi*percent/100-0.5*math.Pi)
-	y := 50 + r*math.Sin(2*math.Pi*percent/100-0.5*math.Pi)
-	largeArc := 0
-	if percent > 50 {
-		largeArc = 1
-	}
-	return fmt.Sprintf("M50,50 L50,0 A50,50 0 %d,1 %.2f,%.2f Z", largeArc, x, y)
-}
-
-func stringIsInSliceOfStrings(s string, list []string) bool {
-	for _, element := range list {
-		if element == s {
-			return true
-		}
-	}
-	return false
-}
-
-func gatherDiskInfo() []DiskInfo {
+// gatherDiskInfo collects disk information, ignoring specified types
+func gatherDiskInfo(ignoreTypes []string) []DiskInfo {
 	partitions, _ := disk.Partitions(true)
 	var diskInfos []DiskInfo
 
@@ -107,87 +61,128 @@ func gatherDiskInfo() []DiskInfo {
 			continue
 		}
 
-		if stringIsInSliceOfStrings(p.Fstype, ignoreTypes) {
+		if contains(ignoreTypes, p.Fstype) {
 			continue
 		}
 
 		usedPercent := usage.UsedPercent
 		freePercent := 100 - usage.UsedPercent
 
-		di := DiskInfo{
-			Device:         p.Device,
-			Size:           usage.Total,
-			Used:           usage.Used,
-			Free:           usage.Free,
-			Type:           p.Fstype,
-			HumanSize:      humanReadableSize(usage.Total),
-			HumanUsed:      humanReadableSize(usage.Used),
-			HumanFree:      humanReadableSize(usage.Free),
-			UsedPercent:    usedPercent,
-			FreePercent:    freePercent,
-			UsedPercentStr: formatPercent(usedPercent),
-			FreePercentStr: formatPercent(freePercent),
-			PieChart:       calculatePieChartPath(usedPercent),
-		}
-
-		if di.UsedPercent > 0 && di.UsedPercent < 100 {
-			di.UsedTextX, di.UsedTextY = calculateTextPosition(di.UsedPercent/2, 35)
-		} else {
-			di.UsedTextX, di.UsedTextY = 50, 50
-		}
-
-		if di.FreePercent > 0 && di.FreePercent < 100 {
-			di.FreeTextX, di.FreeTextY = calculateTextPosition(100-(di.FreePercent/2), 35)
-		} else {
-			di.FreeTextX, di.FreeTextY = 50, 50
-		}
-
-		diskInfos = append(diskInfos, di)
+		diskInfos = append(diskInfos, DiskInfo{
+			Device:      p.Device,
+			Size:        usage.Total,
+			Used:        usage.Used,
+			Free:        usage.Free,
+			Type:        p.Fstype,
+			HumanSize:   humanReadableSize(usage.Total),
+			HumanUsed:   humanReadableSize(usage.Used),
+			HumanFree:   humanReadableSize(usage.Free),
+			UsedPercent: usedPercent,
+			FreePercent: freePercent,
+		})
 	}
 
 	return diskInfos
 }
 
+// contains checks if a slice contains a specific string
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+// renderTemplate parses and executes a template with provided data
 func renderTemplate(w http.ResponseWriter, tmpl string, data interface{}) {
-	err := templates.ExecuteTemplate(w, tmpl+".html", data)
+	t, err := template.ParseFS(staticFs, "web/templates/"+tmpl)
+	if err != nil {
+		log.Printf("template parsing error: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	err = t.Execute(w, data)
 	if err != nil {
 		log.Printf("template execution error: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 
-func handler(w http.ResponseWriter, r *http.Request) {
-	view := r.URL.Query().Get("view")
-	if view == "" {
-		view = "table"
+// handler returns an http.HandlerFunc that renders the disk information page
+func handler(ignoreTypes []string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		data := struct {
+			DiskInfos []DiskInfo
+		}{
+			DiskInfos: gatherDiskInfo(ignoreTypes),
+		}
+		renderTemplate(w, "index.html", data)
 	}
-	data := struct {
-		View      string
-		DiskInfos []DiskInfo
-	}{
-		View:      view,
-		DiskInfos: gatherDiskInfo(),
-	}
-	renderTemplate(w, "index", data)
 }
 
+// multiStringFlag is a custom flag type for handling multiple string flags
+type multiStringFlag []string
+
+func (m *multiStringFlag) String() string {
+	return strings.Join(*m, ",")
+}
+
+func (m *multiStringFlag) Set(value string) error {
+	*m = append(*m, value)
+	return nil
+}
+
+func (m *multiStringFlag) Type() string {
+	return "string"
+}
+
+//go:embed web
+var staticFs embed.FS
+
 func main() {
-	templates = template.Must(template.ParseFiles("templates/index.html"))
+	var ignoreTypes multiStringFlag
+
+	envIgnoreTypes := os.Getenv("DISKINFO_IGNORE_TYPES")
+	if envIgnoreTypes != "" {
+		ignoreTypes = strings.Split(envIgnoreTypes, ",")
+	}
+
+	pflag.VarP(&ignoreTypes, "ignore-type", "i", "File system types to ignore (can be specified multiple times)")
+	help := pflag.BoolP("help", "h", false, "Show help message")
+
+	// Override the default usage function to include custom environment variable information
+	pflag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+		pflag.PrintDefaults()
+		fmt.Fprintln(os.Stderr, "\nYou can also use the DISKINFO_IGNORE_TYPES environment variable to specify file system types to ignore, separated by commas (example: DISKINFO_IGNORE_TYPES=nfs,ext4).")
+	}
+
+	pflag.Parse()
+
+	if *help {
+		pflag.Usage()
+		os.Exit(0)
+	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", handler)
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+	mux.HandleFunc("/", handler(ignoreTypes))
+
+	// Only this ugly way worked with the correct mime type
+	fsys := fs.FS(staticFs)
+	contentStatic, _ := fs.Sub(fsys, "web/static")
+	staticHandler := http.StripPrefix("/static/", http.FileServer(http.FS(contentStatic)))
+	mux.Handle("/static/", staticHandler)
 
 	server := &http.Server{
 		Addr:    ":8080",
 		Handler: mux,
 	}
 
-	// Channel to listen for signals
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
-	// Goroutine to start the server
 	go func() {
 		log.Println("Starting server on :8080")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

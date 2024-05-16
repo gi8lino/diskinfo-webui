@@ -1,0 +1,131 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Disk Info</title>
+    <link rel="stylesheet" type="text/css" href="/static/styles.css" />
+  </head>
+  <body>
+    <h1>Disk Information</h1>
+    <table class="table sortable">
+      <thead>
+        <tr>
+          <th data-sort="device">
+            Device <span class="sort-indicator">▲</span>
+          </th>
+          <th data-sort="size">
+            Total Size <span class="sort-indicator">▲</span>
+          </th>
+          <th data-sort="used">Used <span class="sort-indicator">▲</span></th>
+          <th data-sort="free">Free <span class="sort-indicator">▲</span></th>
+          <th data-sort="type">Type <span class="sort-indicator">▲</span></th>
+          <th data-sort="usage">Usage <span class="sort-indicator">▲</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .DiskInfos}}
+        <tr>
+          <td>{{.Device}}</td>
+          <td data-value="{{.Size}}">{{.HumanSize}}</td>
+          <td data-value="{{.Used}}">{{.HumanUsed}}</td>
+          <td data-value="{{.Free}}">{{.HumanFree}}</td>
+          <td>{{.Type}}</td>
+          <td data-value="{{.UsedPercent}}">
+            <div class="horizontal-bar">
+              <div
+                class="used tooltip-trigger"
+                style="width: {{.UsedPercent}}%;"
+                data-tooltip="Used: {{.HumanUsed}} ({{.UsedPercent}}%)"
+              ></div>
+              <div
+                class="free tooltip-trigger"
+                style="width: {{.FreePercent}}%;"
+                data-tooltip="Free: {{.HumanFree}} ({{.FreePercent}}%)"
+              ></div>
+            </div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    <div class="tooltip" id="tooltip"></div>
+    <script>
+      document.addEventListener("DOMContentLoaded", function () {
+        const triggers = document.querySelectorAll(".tooltip-trigger");
+        const tooltip = document.getElementById("tooltip");
+
+        triggers.forEach((trigger) => {
+          trigger.addEventListener("mouseenter", function () {
+            tooltip.textContent = this.dataset.tooltip;
+            tooltip.style.display = "block";
+          });
+
+          trigger.addEventListener("mouseleave", function () {
+            tooltip.style.display = "none";
+          });
+
+          trigger.addEventListener("mousemove", function (e) {
+            tooltip.style.left = e.pageX + 10 + "px";
+            tooltip.style.top = e.pageY + 10 + "px";
+          });
+        });
+
+        // Sortable table functionality
+        document
+          .querySelectorAll(".sortable th[data-sort]")
+          .forEach((header) => {
+            header.addEventListener("click", function () {
+              const table = header.closest("table");
+              const tbody = table.querySelector("tbody");
+              const rows = Array.from(tbody.querySelectorAll("tr"));
+              const index = Array.from(header.parentNode.children).indexOf(
+                header,
+              );
+              const type = header.dataset.sort;
+              const ascending = header.classList.toggle("asc");
+
+              rows.sort((a, b) => {
+                const aText =
+                  a.children[index].dataset.value ||
+                  a.children[index].textContent;
+                const bText =
+                  b.children[index].dataset.value ||
+                  b.children[index].textContent;
+
+                if (
+                  type === "size" ||
+                  type === "used" ||
+                  type === "free" ||
+                  type === "usage"
+                ) {
+                  return ascending ? aText - bText : bText - aText;
+                } else {
+                  return ascending
+                    ? aText.localeCompare(bText)
+                    : bText.localeCompare(aText);
+                }
+              });
+
+              rows.forEach((row) => tbody.appendChild(row));
+
+              document
+                .querySelectorAll(".sortable th[data-sort]")
+                .forEach((th) => {
+                  if (th !== header) th.classList.remove("asc", "desc");
+                });
+              header.classList.toggle("desc", !ascending);
+
+              // Update sort indicator
+              document
+                .querySelectorAll(".sort-indicator")
+                .forEach((indicator) => {
+                  indicator.textContent = "▲";
+                });
+              header.querySelector(".sort-indicator").textContent = ascending
+                ? "▲"
+                : "▼";
+            });
+          });
+      });
+    </script>
+  </body>
+</html>
